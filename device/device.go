@@ -1,3 +1,5 @@
+// Do not forget to set MACHINE_ID environment variable before compiling!
+
 package main
 
 import (
@@ -5,6 +7,8 @@ import (
 	"fmt"
 	"github.com/gorilla/websocket"
 	"io"
+	"io/ioutil"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -15,19 +19,34 @@ import (
 
 const (
 	playlistPath = "/home/nikita/dev/go/src/github.com/user/SharedMusic/device/samples/playlist.txt"
-	// server_url = "http://52.174.6.203:8080/edison"
-	serverHost = "localhost:8080"
-	serverPath = "/edison"
-	edisonPort = ":8081"
+	serverHost   = "localhost:8080"
+	serverPath   = "/edison"
+	// serverHost = "localhost:8080"
+	accessTocken = "" // fill to work
 )
+
+type VKApiResponce struct {
+	Aid       int    `json: "aid`
+	Owner_id  int    `json: "owner_id"`
+	Artist    string `json: "artist"`
+	Title     string `json: "title"`
+	Duration  int    `json: "duration"`
+	Url       string `json: "url"`
+	Lyrics_id string `json: "lyrics_id"`
+	Genre     int    `json: "genre"`
+}
+
+type VKApiResponcesList struct {
+	Responces []VKApiResponce `json:"response"`
+}
 
 type RequestToServer struct {
 	Device_id int // unique id of Intel Edison
 }
 
 type ServerResponce struct {
-	Command  string // pause, unpause, push, pop
-	AudioURL string // [optionary] url to audio to push
+	Command string // pause, unpause, push, pop
+	AudioID string // [optionary] id of audio to push
 }
 
 var inPipe io.WriteCloser
@@ -57,6 +76,9 @@ func handleCtrlC(c chan os.Signal) {
 func main() {
 	var err error
 
+	// mplayer always play first song in playlist. we should pause mplayer at first song and on "push" command play next song
+	skipAudio := true
+
 	// create handler for Ctrl-C signal
 	c := make(chan os.Signal)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
@@ -69,7 +91,7 @@ func main() {
 	//defer conn.Close()
 
 	// send initial information about Intel Edison device
-	id, _ := strconv.Atoi("24864077")
+	id, _ := strconv.Atoi(os.Getenv("MACHINE_ID"))
 	outRequest := RequestToServer{Device_id: id}
 	outMessage, err := json.Marshal(outRequest)
 	err = conn.WriteMessage(websocket.TextMessage, outMessage)
@@ -88,9 +110,11 @@ func main() {
 
 	// start mplayer daemon
 	err = mplayer.Start()
-	if err != nil {
-		fmt.Fprint(os.Stderr, "mplayer.Start() error")
-	}
+	check(err)
+
+	// pause mplayer at first song
+	_, err = inPipe.Write([]byte("pause\n"))
+	check(err)
 
 	// read messages from websocket, connected to server
 	for {
@@ -102,12 +126,40 @@ func main() {
 
 		switch inMessage.Command {
 		case "pause", "unpause":
-			_, err = inPipe.Write([]byte("pause\n"))
-			check(err)
+			fmt.Println("pause/unpause command")
+
+			if skipAudio {
+				skipAudio = false
+				_, err = inPipe.Write([]byte("pt_step 1\n"))
+			} else {
+				_, err = inPipe.Write([]byte("pause\n"))
+				check(err)
+			}
 		case "push":
-			// ignore
-		case "pop":
-			// ignore
+			fmt.Println("push command")
+
+			apiHttpResponce, err := http.Get("https://api.vk.com/method/audio.getById?audios=" + os.Getenv("MACHINE_ID") + "_" + inMessage.AudioID + "&access_token=" + accessTocken)
+			check(err)
+			apiJsonResponce, err := ioutil.ReadAll(apiHttpResponce.Body)
+			check(err)
+
+			var apiResponces = new(VKApiResponcesList)
+			err = json.Unmarshal(apiJsonResponce, apiResponces)
+			check(err)
+
+			fmt.Println(apiResponces.Responces[0].Url)
+
+			_, err = inPipe.Write([]byte("loadfile " + apiResponces.Responces[0].Url + " 1\n"))
+			check(err)
+		case "next":
+			fmt.Println("next command")
+
+			// exit from mplayer for playing with another playlist
+			_, err = inPipe.Write([]byte("exit\n"))
+			check(err)
+
+			_, err = inPipe.Write([]byte("pt_step 1\n"))
+			check(err)
 		}
 
 	}

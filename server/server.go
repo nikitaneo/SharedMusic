@@ -20,8 +20,8 @@ type RequestToServer struct {
 }
 
 type ServerResponce struct {
-	Command  string
-	AudioURL string
+	Command string
+	AudioID string
 }
 
 func check(err error) {
@@ -39,17 +39,23 @@ func clientHandler(w http.ResponseWriter, r *http.Request) {
 	check(err)
 
 	var outMessage ServerResponce
+
 	switch r.PostForm["command"][0] {
 	case "pause":
 		outMessage = ServerResponce{"pause", ""}
+		check(err)
 	case "unpause":
-		outMessage = ServerResponce{"unpase", ""}
+		outMessage = ServerResponce{"unpause", ""}
 		check(err)
 	case "push":
-		outMessage = ServerResponce{"push", r.PostForm["audioURL"][0]}
+		outMessage = ServerResponce{"push", r.PostForm["AudioID"][0]}
 		check(err)
-	case "pop":
-		outMessage = ServerResponce{"pop", ""}
+	case "next":
+		outMessage = ServerResponce{"next", ""}
+		check(err)
+	default:
+		fmt.Println("Unknown command!")
+		return
 	}
 
 	message, err := json.Marshal(outMessage)
